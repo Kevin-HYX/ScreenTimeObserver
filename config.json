@@ -4,6 +4,7 @@
   "idle_threshold_sec": 180,
   "tick_sec": 1,
   "reconcile_sec": 30,
+  "icon_state_dir": "D:/ScreenTimeObserver/assets/states",
   "heartbeat_sec": 60,
   "paused_heartbeat_sec": 60,
   "gap_report_sec": 90,

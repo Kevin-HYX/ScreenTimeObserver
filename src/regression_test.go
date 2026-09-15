@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"math"
 	"os"
 	"path/filepath"
 	"testing"
@@ -97,5 +98,102 @@ func TestReviewDoesNotAttributeGapOrHistoricalTail(t *testing.T) {
 	}
 	if v.OpenTail != 0 || len(v.Top) != 0 || len(v.Kinds) != 1 || v.Kinds[0].Name != "unknown" {
 		t.Fatalf("空洞或历史尾部被误计: %s", b)
+	}
+}
+
+// TestClipboardWrite 只在显式开启时运行：它会覆盖当前剪贴板内容。
+func TestClipboardWrite(t *testing.T) {
+	if os.Getenv("SCT_CLIPBOARD_TEST") != "1" {
+		t.Skip("设置 SCT_CLIPBOARD_TEST=1 才运行，避免动到用户剪贴板")
+	}
+	root := "D:" + string(os.PathSeparator)
+	want := filepath.Join(root, "ScreenTimeObserver", "data")
+	if err := setClipboardText(want); err != nil {
+		t.Fatalf("写入剪贴板失败: %v", err)
+	}
+	t.Log("已写入剪贴板:", want)
+}
+
+// TestAudioDetection 需要真的在系统里播放或停掉声音，所以默认跳过。
+// 运行方式：设置 SCT_AUDIO_EXPECT=playing 或 silent。
+func TestAudioDetection(t *testing.T) {
+	expect := os.Getenv("SCT_AUDIO_EXPECT")
+	if expect == "" {
+		t.Skip("设置 SCT_AUDIO_EXPECT=playing 或 silent 才运行")
+	}
+	if err := comInit(); err != nil {
+		t.Fatalf("%v", err)
+	}
+	m := &audioMeter{}
+	defer m.close()
+	peak, err := m.peak()
+	if err != nil {
+		t.Fatalf("读取音频峰值失败: %v", err)
+	}
+	t.Logf("峰值 = %v（阈值 %v）", peak, audioPeakThreshold)
+	switch expect {
+	case "playing":
+		if peak <= audioPeakThreshold {
+			t.Fatalf("应该在播放，但峰值为 %v", peak)
+		}
+	case "silent":
+		if peak > audioPeakThreshold {
+			t.Fatalf("应该是静音，但峰值为 %v", peak)
+		}
+	default:
+		t.Fatalf("SCT_AUDIO_EXPECT 只能是 playing 或 silent，收到 %q", expect)
+	}
+}
+
+// TestMediaCountsAsPresence 检查「有人看视频但没动键鼠」这一类时间：
+// 单独记为 media，同时计入该应用的占用。
+func TestMediaCountsAsPresence(t *testing.T) {
+	base := float64(1767315600)
+	var recs []Record
+	for i := 0; i < 4; i++ {
+		recs = append(recs, Record{
+			TS:      "2026-01-02T09:00:00.000+08:00",
+			Epoch:   base + float64(i*60),
+			Event:   "heartbeat",
+			Reason:  "heartbeat",
+			Session: "active",
+			Process: "potplayer.exe",
+			Title:   "电影",
+			Media:   true,
+			IdleSec: floatPtr(600),
+		})
+	}
+	a := analyzeDay("2026-01-02", recs, 0, "x.jsonl", 90)
+	if len(a.ByKind) != 1 || a.ByKind[0].Name != "media" || a.ByKind[0].Sec != 180 {
+		t.Fatalf("media 未单独成类: %v", a.ByKind)
+	}
+	if len(a.ByProcess) != 1 || a.ByProcess[0].Name != "potplayer.exe" || a.ByProcess[0].Sec != 180 {
+		t.Fatalf("观看时间未计入应用占用: %v", a.ByProcess)
+	}
+	if a.HoleSec != 0 || a.CoveredSec != 180 {
+		t.Fatalf("观看不应算作空洞: covered=%v hole=%v", a.CoveredSec, a.HoleSec)
+	}
+}
+
+func TestIdleState(t *testing.T) {
+	cases := []struct {
+		name    string
+		idleSec float64
+		audio   bool
+		idle    bool
+		media   bool
+	}{
+		{"刚开始用", 5, false, false, false},
+		{"刚离开但没声音", 200, false, true, false},
+		{"看视频没动键鼠", 200, true, false, true},
+		{"正在操作且有背景音乐", 1, true, false, false},
+		{"刚好到阈值", 180, false, true, false},
+		{"取不到空闲时间", math.NaN(), false, false, false},
+	}
+	for _, c := range cases {
+		idle, media := idleState(c.idleSec, 180, c.audio)
+		if idle != c.idle || media != c.media {
+			t.Errorf("%s: 期望 idle=%v media=%v，实际 idle=%v media=%v", c.name, c.idle, c.media, idle, media)
+		}
 	}
 }

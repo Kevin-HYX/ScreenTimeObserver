@@ -2,6 +2,7 @@ package main
 
 import (
 	"os"
+	"path/filepath"
 	"runtime"
 	"syscall"
 	"time"
@@ -103,6 +104,7 @@ func (a *App) onTick() {
 	a.tick()
 	if time.Since(a.lastStatusMono).Seconds() >= 10 {
 		a.writeStatus()
+		a.pollDrops()
 		a.refreshTrayTip()
 		a.refreshTrayIcon()
 		a.retryTrayIfNeeded()
@@ -140,15 +142,19 @@ func (a *App) createWindow() error {
 }
 
 func setTip(nid *notifyIconData, s string) {
+	setWideText(nid.szTip[:], s)
+}
+
+func setWideText(dst []uint16, s string) {
 	u := syscall.StringToUTF16(s)
-	if len(u) > len(nid.szTip) {
-		u = u[:len(nid.szTip)]
+	if len(u) > len(dst) {
+		u = u[:len(dst)]
 		u[len(u)-1] = 0
 	}
-	for i := range nid.szTip {
-		nid.szTip[i] = 0
+	for i := range dst {
+		dst[i] = 0
 	}
-	copy(nid.szTip[:], u)
+	copy(dst, u)
 }
 
 func (a *App) addTray() error {
@@ -187,7 +193,9 @@ func (a *App) refreshTrayTip() {
 		return
 	}
 	tip := collectorName + " · " + a.stateText()
-	if !a.paused && !a.suspended && a.fg.Process != "" {
+	if a.alerting() {
+		tip += " · " + a.alertDetail()
+	} else if !a.paused && !a.suspended && a.fg.Process != "" {
 		tip += " · " + a.fg.Process
 	}
 	setTip(a.nid, tip)
@@ -216,6 +224,9 @@ func (a *App) showMenu() {
 	dataLabel := u16Ptr("打开数据目录")
 	procAppendMenuW.Call(menu, mfString, idTrayOpen, uintptr(unsafe.Pointer(dataLabel)))
 	runtime.KeepAlive(dataLabel)
+	copyLabel := u16Ptr("复制数据目录")
+	procAppendMenuW.Call(menu, mfString, idTrayCopyPath, uintptr(unsafe.Pointer(copyLabel)))
+	runtime.KeepAlive(copyLabel)
 	procAppendMenuW.Call(menu, mfSeparator, 0, 0)
 
 	exitLabel := u16Ptr("退出采集器")
@@ -234,6 +245,8 @@ func (a *App) showMenu() {
 		a.togglePause()
 	case idTrayOpen:
 		a.openDataDir()
+	case idTrayCopyPath:
+		a.copyDataDir()
 	case idTrayExit:
 		a.shutdown("tray_exit")
 	}
@@ -274,6 +287,10 @@ func (a *App) retryTrayIfNeeded() {
 func (a *App) run(maxSeconds float64) int {
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
+	// COM 要在线程上初始化；音频检测在同一个线程里跑，这里初始化一次即可
+	if err := comInit(); err != nil {
+		a.store.Log(err.Error() + "，音频检测不可用")
+	}
 
 	store, err := newStore(a.cfg.DataDir, a.cfg.LogDir)
 	if err != nil {
@@ -419,68 +436,104 @@ func (a *App) loadIconFile(path string) uintptr {
 	return h
 }
 
-// loadTrayIcon 启动时按主题挑图标；全失败时退回系统默认图标并明确记录。
+// stateIconPath 由图标目录推出状态变体路径；文件不存在时返回空串，交给调用方回退。
+func (a *App) stateIconPath(ink, state string) string {
+	if a.cfg.IconStateDir == "" {
+		return ""
+	}
+	p := filepath.Join(a.cfg.IconStateDir, ink+"-"+state+".ico")
+	if fileExists(p) {
+		return p
+	}
+	return ""
+}
+
+func inkName(light bool) string {
+	if light {
+		return "light"
+	}
+	return "dark"
+}
+
+// pickIcon 按主题与状态挑图标，逐级回退，每次回退都留日志，不静默换图。
+func (a *App) pickIcon(wantLight bool, state string) (uintptr, bool) {
+	ink, base, other := "dark", a.cfg.IconMonoPath, a.cfg.IconPath
+	if wantLight {
+		ink, base, other = "light", a.cfg.IconPath, a.cfg.IconMonoPath
+	}
+	if p := a.stateIconPath(ink, state); p != "" {
+		if h := a.loadIconFile(p); h != 0 {
+			return h, true
+		}
+	} else {
+		a.store.Log("state icon missing: " + ink + "-" + state + ".ico，回退到基础图标")
+	}
+	if h := a.loadIconFile(base); h != 0 {
+		return h, true
+	}
+	if h := a.loadIconFile(other); h != 0 {
+		a.store.Log("基础图标缺失，改用另一套主题图标: " + other)
+		return h, true
+	}
+	a.store.Log("ICON FALLBACK: 没有可用图标文件，使用系统默认图标")
+	sys, _, _ := procLoadIconW.Call(0, idiApplication)
+	return sys, false
+}
+
+// loadTrayIcon 启动时按主题与当前状态挑图标。
 func (a *App) loadTrayIcon() uintptr {
 	light, known := systemUsesLightTheme()
 	want := !known || light
-	h := uintptr(0)
-	if want {
-		h = a.loadIconFile(a.cfg.IconPath)
-	} else {
-		h = a.loadIconFile(a.cfg.IconMonoPath)
-		if h == 0 {
-			h = a.loadIconFile(a.cfg.IconPath)
-		}
-	}
-	if h == 0 {
-		a.store.Log("ICON FALLBACK: 没有可用的图标文件，使用系统默认图标。icon_path=" + a.cfg.IconPath)
-		sys, _, _ := procLoadIconW.Call(0, idiApplication)
-		a.trayIconLight = want
-		a.trayIconOwned = false
-		return sys
-	}
+	state := a.stateKey()
+	h, owned := a.pickIcon(want, state)
 	a.trayIconLight = want
-	a.trayIconOwned = true
-	a.trayIconH = h
+	a.trayIconState = state
+	a.trayIconOwned = owned
+	if h != 0 {
+		a.trayIconH = h
+	}
 	if !known {
 		a.store.Log("theme unknown, using light-theme icon")
 	}
 	return h
 }
 
-// refreshTrayIcon 主题切换后热替换托盘图标（每次状态刷新调用，代价极低）。
+// refreshTrayIcon 主题或状态变化后热替换图标，并在异常与恢复时各弹一次气泡。
 func (a *App) refreshTrayIcon() {
 	if !a.trayOK || a.nid == nil {
 		return
 	}
 	light, known := systemUsesLightTheme()
 	want := !known || light
-	if want == a.trayIconLight {
+	state := a.stateKey()
+	if want == a.trayIconLight && state == a.trayIconState {
 		return
 	}
-	h := uintptr(0)
-	if want {
-		h = a.loadIconFile(a.cfg.IconPath)
-	} else {
-		h = a.loadIconFile(a.cfg.IconMonoPath)
-		if h == 0 {
-			h = a.loadIconFile(a.cfg.IconPath)
-		}
-	}
+	prev := a.trayIconState
+	h, owned := a.pickIcon(want, state)
 	if h == 0 {
-		a.store.Log("theme switch: no usable icon file, keeping current icon")
+		a.store.Log("theme/state switch: 没有可用图标，保持当前图标")
 		return
 	}
 	if a.trayIconOwned && a.trayIconH != 0 && a.trayIconH != h {
 		procDestroyIcon.Call(a.trayIconH)
 	}
 	a.trayIconH = h
-	a.trayIconOwned = true
+	a.trayIconOwned = owned
 	a.trayIconLight = want
+	a.trayIconState = state
 	a.nid.hIcon = h
 	a.nid.uFlags = nifIcon | nifMessage | nifTip
 	procShellNotifyIconW.Call(nimModify, uintptr(unsafe.Pointer(a.nid)))
-	a.store.Log("tray icon switched, light-theme=" + btoa(want))
+	a.store.Log("tray icon switched: state=" + state + " ink=" + inkName(want))
+	if prev == "" || prev == state {
+		return
+	}
+	if state == "alert" {
+		a.notify("采集异常", a.alertDetail())
+	} else if prev == "alert" {
+		a.notify("采集已恢复", "当前状态："+a.stateText())
+	}
 }
 
 func btoa(b bool) string {
@@ -488,4 +541,33 @@ func btoa(b bool) string {
 		return "true"
 	}
 	return "false"
+}
+
+// copyDataDir 把数据目录路径放进剪贴板，方便直接粘给别的程序或 AI。
+func (a *App) copyDataDir() {
+	dir, err := filepath.Abs(filepath.FromSlash(a.cfg.DataDir))
+	if err != nil {
+		a.store.Log("cannot resolve data dir: " + err.Error())
+		return
+	}
+	if err := setClipboardText(dir); err != nil {
+		a.store.Log("copy data dir failed: " + err.Error())
+		a.notify("复制失败", "剪贴板被其他程序占用，稍后再试")
+		return
+	}
+	a.store.Log("copied data dir to clipboard: " + dir)
+	a.notify("已复制数据目录", dir)
+}
+
+// notify 用托盘气泡给一次操作反馈；系统关闭通知时只是不显示，不影响功能。
+func (a *App) notify(title, text string) {
+	if !a.trayOK || a.nid == nil {
+		return
+	}
+	setWideText(a.nid.szInfoTitle[:], title)
+	setWideText(a.nid.szInfo[:], text)
+	a.nid.dwInfoFlags = niifInfo
+	a.nid.uFlags = nifIcon | nifMessage | nifTip | nifInfo
+	procShellNotifyIconW.Call(nimModify, uintptr(unsafe.Pointer(a.nid)))
+	a.nid.uFlags = nifIcon | nifMessage | nifTip
 }
