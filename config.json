@@ -1,0 +1,12 @@
+{
+  "data_dir": "D:\\ScreenTimeObserver\\data",
+  "log_dir": "D:\\ScreenTimeObserver\\logs",
+  "idle_threshold_sec": 180,
+  "tick_sec": 1,
+  "reconcile_sec": 30,
+  "heartbeat_sec": 60,
+  "paused_heartbeat_sec": 60,
+  "gap_report_sec": 90,
+  "title_max_len": 300,
+  "tray": true
+}

@@ -1,0 +1,11 @@
+# 运行产物：可执行文件
+*.exe
+*.exe~
+# 本机采集数据与日志：只留本地，绝不入库
+data/
+logs/
+paused.flag
+# 审查/重构前的本地备份
+backups/
+# Python 构建缓存
+__pycache__/
