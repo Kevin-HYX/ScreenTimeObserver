@@ -9,3 +9,5 @@ paused.flag
 backups/
 # Python 构建缓存
 __pycache__/
+# 验证用的临时探测目录
+_probe/

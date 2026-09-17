@@ -1,7 +1,10 @@
 package main
 
 import (
+	"errors"
+	"runtime"
 	"syscall"
+	"time"
 	"unsafe"
 )
 
@@ -12,56 +15,71 @@ var (
 	shell32  = syscall.NewLazyDLL("shell32.dll")
 	kernel32 = syscall.NewLazyDLL("kernel32.dll")
 	advapi32 = syscall.NewLazyDLL("advapi32.dll")
+	gdi32    = syscall.NewLazyDLL("gdi32.dll")
 )
 
 var (
-	procGetForegroundWindow        = user32.NewProc("GetForegroundWindow")
-	procGetWindowThreadProcessID   = user32.NewProc("GetWindowThreadProcessId")
-	procGetWindowTextW             = user32.NewProc("GetWindowTextW")
-	procGetClassNameW              = user32.NewProc("GetClassNameW")
-	procGetLastInputInfo           = user32.NewProc("GetLastInputInfo")
-	procOpenInputDesktop           = user32.NewProc("OpenInputDesktop")
-	procCloseDesktop               = user32.NewProc("CloseDesktop")
-	procSetWinEventHook            = user32.NewProc("SetWinEventHook")
-	procUnhookWinEvent             = user32.NewProc("UnhookWinEvent")
-	procRegisterClassExW           = user32.NewProc("RegisterClassExW")
-	procCreateWindowExW            = user32.NewProc("CreateWindowExW")
-	procDefWindowProcW             = user32.NewProc("DefWindowProcW")
-	procDestroyWindow              = user32.NewProc("DestroyWindow")
-	procSetTimer                   = user32.NewProc("SetTimer")
-	procKillTimer                  = user32.NewProc("KillTimer")
-	procLoadIconW                  = user32.NewProc("LoadIconW")
-	procCreatePopupMenu            = user32.NewProc("CreatePopupMenu")
-	procAppendMenuW                = user32.NewProc("AppendMenuW")
-	procDestroyMenu                = user32.NewProc("DestroyMenu")
-	procTrackPopupMenu             = user32.NewProc("TrackPopupMenu")
-	procGetCursorPos               = user32.NewProc("GetCursorPos")
-	procGetMessageW                = user32.NewProc("GetMessageW")
-	procPeekMessageW               = user32.NewProc("PeekMessageW")
-	procTranslateMessage           = user32.NewProc("TranslateMessage")
-	procDispatchMessageW           = user32.NewProc("DispatchMessageW")
-	procPostQuitMessage            = user32.NewProc("PostQuitMessage")
-	procPostMessageW               = user32.NewProc("PostMessageW")
-	procSetForegroundWindow        = user32.NewProc("SetForegroundWindow")
-	procShellNotifyIconW           = shell32.NewProc("Shell_NotifyIconW")
-	procOpenProcess                = kernel32.NewProc("OpenProcess")
-	procQueryFullProcessImageNameW = kernel32.NewProc("QueryFullProcessImageNameW")
-	procCloseHandle                = kernel32.NewProc("CloseHandle")
-	procCreateMutexW               = kernel32.NewProc("CreateMutexW")
-	procGetModuleHandleW           = kernel32.NewProc("GetModuleHandleW")
-	procGetCurrentProcess          = kernel32.NewProc("GetCurrentProcess")
-	procGetProcessTimes            = kernel32.NewProc("GetProcessTimes")
-	procGetTickCount               = kernel32.NewProc("GetTickCount")
-	procGetProcessHandleCount      = kernel32.NewProc("GetProcessHandleCount")
-	procGetTickCount64             = kernel32.NewProc("GetTickCount64")
-	procGetGuiResources            = user32.NewProc("GetGuiResources")
-	procRegisterWindowMessageW     = user32.NewProc("RegisterWindowMessageW")
-	procLoadImageW                 = user32.NewProc("LoadImageW")
-	procGetSystemMetrics           = user32.NewProc("GetSystemMetrics")
-	procDestroyIcon                = user32.NewProc("DestroyIcon")
-	procRegOpenKeyExW              = advapi32.NewProc("RegOpenKeyExW")
-	procRegQueryValueExW           = advapi32.NewProc("RegQueryValueExW")
-	procRegCloseKey                = advapi32.NewProc("RegCloseKey")
+	procGetForegroundWindow           = user32.NewProc("GetForegroundWindow")
+	procGetWindowThreadProcessID      = user32.NewProc("GetWindowThreadProcessId")
+	procGetWindowTextW                = user32.NewProc("GetWindowTextW")
+	procGetClassNameW                 = user32.NewProc("GetClassNameW")
+	procGetLastInputInfo              = user32.NewProc("GetLastInputInfo")
+	procOpenInputDesktop              = user32.NewProc("OpenInputDesktop")
+	procCloseDesktop                  = user32.NewProc("CloseDesktop")
+	procSetWinEventHook               = user32.NewProc("SetWinEventHook")
+	procUnhookWinEvent                = user32.NewProc("UnhookWinEvent")
+	procRegisterClassExW              = user32.NewProc("RegisterClassExW")
+	procCreateWindowExW               = user32.NewProc("CreateWindowExW")
+	procDefWindowProcW                = user32.NewProc("DefWindowProcW")
+	procDestroyWindow                 = user32.NewProc("DestroyWindow")
+	procSetTimer                      = user32.NewProc("SetTimer")
+	procKillTimer                     = user32.NewProc("KillTimer")
+	procLoadIconW                     = user32.NewProc("LoadIconW")
+	procCreatePopupMenu               = user32.NewProc("CreatePopupMenu")
+	procAppendMenuW                   = user32.NewProc("AppendMenuW")
+	procDestroyMenu                   = user32.NewProc("DestroyMenu")
+	procTrackPopupMenu                = user32.NewProc("TrackPopupMenu")
+	procGetCursorPos                  = user32.NewProc("GetCursorPos")
+	procGetMessageW                   = user32.NewProc("GetMessageW")
+	procPeekMessageW                  = user32.NewProc("PeekMessageW")
+	procTranslateMessage              = user32.NewProc("TranslateMessage")
+	procDispatchMessageW              = user32.NewProc("DispatchMessageW")
+	procPostQuitMessage               = user32.NewProc("PostQuitMessage")
+	procPostMessageW                  = user32.NewProc("PostMessageW")
+	procSetForegroundWindow           = user32.NewProc("SetForegroundWindow")
+	procShellNotifyIconW              = shell32.NewProc("Shell_NotifyIconW")
+	procOpenProcess                   = kernel32.NewProc("OpenProcess")
+	procQueryFullProcessImageNameW    = kernel32.NewProc("QueryFullProcessImageNameW")
+	procCloseHandle                   = kernel32.NewProc("CloseHandle")
+	procCreateMutexW                  = kernel32.NewProc("CreateMutexW")
+	procGetModuleHandleW              = kernel32.NewProc("GetModuleHandleW")
+	procGetCurrentProcess             = kernel32.NewProc("GetCurrentProcess")
+	procGetProcessTimes               = kernel32.NewProc("GetProcessTimes")
+	procGetTickCount                  = kernel32.NewProc("GetTickCount")
+	procGetProcessHandleCount         = kernel32.NewProc("GetProcessHandleCount")
+	procGetTickCount64                = kernel32.NewProc("GetTickCount64")
+	procGetGuiResources               = user32.NewProc("GetGuiResources")
+	procRegisterWindowMessageW        = user32.NewProc("RegisterWindowMessageW")
+	procLoadImageW                    = user32.NewProc("LoadImageW")
+	procGetSystemMetrics              = user32.NewProc("GetSystemMetrics")
+	procDestroyIcon                   = user32.NewProc("DestroyIcon")
+	procGetDC                         = user32.NewProc("GetDC")
+	procReleaseDC                     = user32.NewProc("ReleaseDC")
+	procGetCursorInfo                 = user32.NewProc("GetCursorInfo")
+	procGetIconInfo                   = user32.NewProc("GetIconInfo")
+	procDrawIconEx                    = user32.NewProc("DrawIconEx")
+	procSetProcessDpiAwarenessContext = user32.NewProc("SetProcessDpiAwarenessContext")
+	procSetProcessDPIAware            = user32.NewProc("SetProcessDPIAware")
+	procCreateCompatibleDC            = gdi32.NewProc("CreateCompatibleDC")
+	procDeleteDC                      = gdi32.NewProc("DeleteDC")
+	procCreateCompatibleBitmap        = gdi32.NewProc("CreateCompatibleBitmap")
+	procSelectObject                  = gdi32.NewProc("SelectObject")
+	procBitBlt                        = gdi32.NewProc("BitBlt")
+	procGetDIBits                     = gdi32.NewProc("GetDIBits")
+	procDeleteObject                  = gdi32.NewProc("DeleteObject")
+	procRegOpenKeyExW                 = advapi32.NewProc("RegOpenKeyExW")
+	procRegQueryValueExW              = advapi32.NewProc("RegQueryValueExW")
+	procRegCloseKey                   = advapi32.NewProc("RegCloseKey")
 )
 
 const (
@@ -86,10 +104,11 @@ const (
 	wmTrayIcon  = wmApp + 1
 	timerTickID = 1
 
-	idTrayPause  = 1001
-	idTrayOpen   = 1002
-	idTrayExit   = 1003
-	idTrayStatus = 1004
+	idTrayPause    = 1001
+	idTrayOpen     = 1002
+	idTrayExit     = 1003
+	idTrayStatus   = 1004
+	idTrayCopyPath = 1005
 )
 
 const (
@@ -233,3 +252,88 @@ func processCPUSeconds() float64 {
 	}
 	return toSec(kernel) + toSec(user)
 }
+
+var (
+	procOpenClipboard    = user32.NewProc("OpenClipboard")
+	procEmptyClipboard   = user32.NewProc("EmptyClipboard")
+	procSetClipboardData = user32.NewProc("SetClipboardData")
+	procCloseClipboard   = user32.NewProc("CloseClipboard")
+	procGlobalAlloc      = kernel32.NewProc("GlobalAlloc")
+	procGlobalLock       = kernel32.NewProc("GlobalLock")
+	procGlobalUnlock     = kernel32.NewProc("GlobalUnlock")
+	procGlobalFree       = kernel32.NewProc("GlobalFree")
+	procRtlMoveMemory    = kernel32.NewProc("RtlMoveMemory")
+)
+
+const (
+	cfUnicodeText = 13
+	gmemMoveable  = 0x0002
+
+	nifInfo  = 0x00000010
+	niifInfo = 0x00000001
+)
+
+// setClipboardText 把文本放进剪贴板。剪贴板可能被别的程序短暂占用，所以重试几次。
+// 内存用 RtlMoveMemory 直接写，避免 uintptr 与指针互转带来的不安全性。
+func setClipboardText(s string) error {
+	u, err := syscall.UTF16FromString(s)
+	if err != nil {
+		return err
+	}
+	size := uintptr(len(u) * 2)
+	h, _, allocErr := procGlobalAlloc.Call(gmemMoveable, size)
+	if h == 0 {
+		return allocErr
+	}
+	ptr, _, lockErr := procGlobalLock.Call(h)
+	if ptr == 0 {
+		procGlobalFree.Call(h)
+		return lockErr
+	}
+	procRtlMoveMemory.Call(ptr, uintptr(unsafe.Pointer(&u[0])), size)
+	runtime.KeepAlive(u)
+	procGlobalUnlock.Call(h)
+
+	var last error
+	for attempt := 0; attempt < 5; attempt++ {
+		ok, _, openErr := procOpenClipboard.Call(0)
+		if ok == 0 {
+			last = openErr
+			time.Sleep(60 * time.Millisecond)
+			continue
+		}
+		procEmptyClipboard.Call()
+		set, _, setErr := procSetClipboardData.Call(cfUnicodeText, h)
+		procCloseClipboard.Call()
+		if set != 0 {
+			return nil // 内存所有权已交给剪贴板，这里不能再释放
+		}
+		procGlobalFree.Call(h)
+		return setErr
+	}
+	procGlobalFree.Call(h)
+	if last == nil {
+		last = errors.New("打开剪贴板失败")
+	}
+	return last
+}
+
+var (
+	ole32 = syscall.NewLazyDLL("ole32.dll")
+
+	procCoInitializeEx   = ole32.NewProc("CoInitializeEx")
+	procCoCreateInstance = ole32.NewProc("CoCreateInstance")
+)
+
+const (
+	coinitApartmentThreaded = 0x0002
+	clsctxAll               = 0x0017
+	rpcChangedMode          = 0x80010106
+)
+
+// 音频接口的 CLSID / IID：默认播放设备枚举器与音量监听接口。
+var (
+	clsidMMDeviceEnumerator   = guid{Data1: 0xBCDE0395, Data2: 0xE52F, Data3: 0x467C, Data4: [8]byte{0x8E, 0x3D, 0xC4, 0x57, 0x92, 0x91, 0x69, 0x2E}}
+	iidIMMDeviceEnumerator    = guid{Data1: 0xA95664D2, Data2: 0x9614, Data3: 0x4F35, Data4: [8]byte{0xA7, 0x46, 0xDE, 0x8D, 0xB6, 0x36, 0x17, 0xE6}}
+	iidIAudioMeterInformation = guid{Data1: 0xC02216F6, Data2: 0x8C67, Data3: 0x4B5B, Data4: [8]byte{0x9D, 0x00, 0xD0, 0x08, 0xE7, 0x3E, 0x00, 0x64}}
+)

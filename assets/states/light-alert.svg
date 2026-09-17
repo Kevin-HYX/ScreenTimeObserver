@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 192 192" width="192" height="192" role="img" aria-labelledby="title">
+  <title id="title">屏幕时间观测器</title>
+  <g fill="none" stroke="#29323D" stroke-width="9" stroke-linecap="round" stroke-linejoin="round">
+    <rect x="16" y="32" width="160" height="108" rx="11"/>
+    <path d="M96 141v21M59 162h74"/>
+  </g>
+  <circle cx="96" cy="86" r="37" fill="none" stroke="#EF4444" stroke-width="8"/>
+  <path d="M96 64v24" fill="none" stroke="#29323D" stroke-width="10" stroke-linecap="round"/><circle cx="96" cy="103" r="5.5" fill="#29323D"/>
+</svg>

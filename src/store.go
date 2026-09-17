@@ -24,6 +24,7 @@ type Record struct {
 	WindowClass string   `json:"window_class"`
 	IdleSec     *float64 `json:"idle_sec"`
 	Idle        bool     `json:"idle"`
+	Media       bool     `json:"media"`
 	Locked      bool     `json:"locked"`
 	Paused      bool     `json:"paused"`
 	SincePrev   *float64 `json:"since_prev_sec"`
