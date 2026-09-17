@@ -9,5 +9,8 @@
   "paused_heartbeat_sec": 60,
   "gap_report_sec": 90,
   "title_max_len": 300,
-  "tray": true
+  "tray": true,
+  "screenshot_enabled": true,
+  "screenshot_interval_sec": 60,
+  "screenshot_retention_hours": 24
 }

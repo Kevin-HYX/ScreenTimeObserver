@@ -185,7 +185,8 @@ func cmdStatus(cfg Config, asJSON bool) int {
 	}
 	keys := []string{"updated", "uptime_sec", "paused", "session", "idle", "idle_sec",
 		"foreground_process", "foreground_title", "records_written", "records_dropped",
-		"foreground_events", "hook_ok", "tray_ok", "cpu_sec", "data_dir"}
+		"foreground_events", "hook_ok", "tray_ok", "cpu_sec", "screenshot_enabled",
+		"screenshots_written", "screenshot_failures", "last_screenshot_ts", "screenshot_dir", "data_dir"}
 	for _, k := range keys {
 		fmt.Printf("%-20s %v\n", k, v[k])
 	}

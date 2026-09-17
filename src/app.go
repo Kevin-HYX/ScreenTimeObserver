@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 	"unsafe"
@@ -18,36 +20,42 @@ const collectorName = "屏幕时间采集器"
 const mutexName = "ScreenTimeObserver.M1.Collector"
 
 type Config struct {
-	DataDir            string  `json:"data_dir"`
-	LogDir             string  `json:"log_dir"`
-	IdleThresholdSec   float64 `json:"idle_threshold_sec"`
-	TickSec            float64 `json:"tick_sec"`
-	ReconcileSec       float64 `json:"reconcile_sec"`
-	HeartbeatSec       float64 `json:"heartbeat_sec"`
-	PausedHeartbeatSec float64 `json:"paused_heartbeat_sec"`
-	GapReportSec       float64 `json:"gap_report_sec"`
-	TitleMaxLen        int     `json:"title_max_len"`
-	Tray               bool    `json:"tray"`
-	IconPath           string  `json:"icon_path"`
-	IconMonoPath       string  `json:"icon_mono_path"`
-	IconStateDir       string  `json:"icon_state_dir"`
+	DataDir                  string  `json:"data_dir"`
+	LogDir                   string  `json:"log_dir"`
+	IdleThresholdSec         float64 `json:"idle_threshold_sec"`
+	TickSec                  float64 `json:"tick_sec"`
+	ReconcileSec             float64 `json:"reconcile_sec"`
+	HeartbeatSec             float64 `json:"heartbeat_sec"`
+	PausedHeartbeatSec       float64 `json:"paused_heartbeat_sec"`
+	GapReportSec             float64 `json:"gap_report_sec"`
+	TitleMaxLen              int     `json:"title_max_len"`
+	Tray                     bool    `json:"tray"`
+	IconPath                 string  `json:"icon_path"`
+	IconMonoPath             string  `json:"icon_mono_path"`
+	IconStateDir             string  `json:"icon_state_dir"`
+	ScreenshotEnabled        bool    `json:"screenshot_enabled"`
+	ScreenshotIntervalSec    float64 `json:"screenshot_interval_sec"`
+	ScreenshotRetentionHours float64 `json:"screenshot_retention_hours"`
 }
 
 func defaultConfig(exeDir string) Config {
 	return Config{
-		DataDir:            filepath.Join(exeDir, "data"),
-		LogDir:             filepath.Join(exeDir, "logs"),
-		IdleThresholdSec:   180,
-		TickSec:            1,
-		ReconcileSec:       30,
-		HeartbeatSec:       60,
-		PausedHeartbeatSec: 60,
-		GapReportSec:       90,
-		TitleMaxLen:        300,
-		Tray:               true,
-		IconPath:           filepath.Join(exeDir, "assets", "logo.ico"),
-		IconMonoPath:       filepath.Join(exeDir, "assets", "logo-mono.ico"),
-		IconStateDir:       filepath.Join(exeDir, "assets", "states"),
+		DataDir:                  filepath.Join(exeDir, "data"),
+		LogDir:                   filepath.Join(exeDir, "logs"),
+		IdleThresholdSec:         180,
+		TickSec:                  1,
+		ReconcileSec:             30,
+		HeartbeatSec:             60,
+		PausedHeartbeatSec:       60,
+		GapReportSec:             90,
+		TitleMaxLen:              300,
+		Tray:                     true,
+		IconPath:                 filepath.Join(exeDir, "assets", "logo.ico"),
+		IconMonoPath:             filepath.Join(exeDir, "assets", "logo-mono.ico"),
+		IconStateDir:             filepath.Join(exeDir, "assets", "states"),
+		ScreenshotEnabled:        true,
+		ScreenshotIntervalSec:    60,
+		ScreenshotRetentionHours: 24,
 	}
 }
 
@@ -70,6 +78,12 @@ func loadConfig(exeDir, path string) (Config, error) {
 		if abs, err := filepath.Abs(*p); err == nil {
 			*p = abs
 		}
+	}
+	if cfg.ScreenshotIntervalSec <= 0 {
+		cfg.ScreenshotIntervalSec = 60
+	}
+	if cfg.ScreenshotRetentionHours <= 0 {
+		cfg.ScreenshotRetentionHours = 24
 	}
 	return cfg, nil
 }
@@ -96,19 +110,30 @@ type App struct {
 	suspended   bool
 	paused      bool
 
-	lastKey           string
-	lastEpoch         float64
-	lastWriteMono     time.Time
-	lastReconcileMono time.Time
-	lastPausedWrite   time.Time
-	lastStatusMono    time.Time
-	carryDay          string
+	lastKey                   string
+	lastEpoch                 float64
+	lastWriteMono             time.Time
+	lastReconcileMono         time.Time
+	lastPausedWrite           time.Time
+	lastStatusMono            time.Time
+	lastScreenshotMono        time.Time
+	lastScreenshotCleanupMono time.Time
+	carryDay                  string
 
 	tickCount int64
 	fgEvents  int64
 
 	dropsSeen    int64
 	lastDropMono time.Time
+
+	screenshotWG          sync.WaitGroup
+	screenshotBusy        atomic.Bool
+	screenshotPaused      atomic.Bool
+	screenshotsWritten    atomic.Int64
+	screenshotFailures    atomic.Int64
+	lastScreenshotTS      atomic.Value
+	lastScreenshotPath    atomic.Value
+	lastScreenshotFailure atomic.Int64
 
 	hwnd          uintptr
 	trayIconH     uintptr
@@ -312,6 +337,7 @@ func (a *App) syncPause() {
 		return
 	}
 	a.paused = want
+	a.screenshotPaused.Store(want)
 	if a.paused {
 		a.fg = Sample{}
 		a.idleSec = math.NaN()
@@ -320,6 +346,7 @@ func (a *App) syncPause() {
 		a.lastPausedWrite = time.Now()
 		a.store.Log("paused by user (flag file present)")
 	} else {
+		a.lastScreenshotMono = time.Time{}
 		a.refreshForeground()
 		a.refreshIdle()
 		a.emitState("resumed", "user_resume")
@@ -333,6 +360,7 @@ func (a *App) syncPause() {
 func (a *App) tick() {
 	a.tickCount++
 	a.syncPause()
+	a.maybeMaintainScreenshots()
 
 	if a.suspended {
 		return
@@ -405,28 +433,39 @@ func (a *App) reconcile() {
 func (a *App) writeStatus() {
 	idle := a.cfg.IdleThresholdSec
 	st := map[string]any{
-		"process":            "collector",
-		"pid":                os.Getpid(),
-		"updated":            time.Now().Format("2006-01-02T15:04:05-07:00"),
-		"started_at":         a.startedAt.Format("2006-01-02T15:04:05-07:00"),
-		"uptime_sec":         int(time.Since(a.startedMono).Seconds()),
-		"ticks":              a.tickCount,
-		"foreground_events":  a.fgEvents,
-		"records_written":    a.store.Written(),
-		"records_dropped":    a.store.Dropped(),
-		"paused":             a.paused,
-		"session":            a.session(),
-		"idle":               a.idle,
-		"media":              a.media,
-		"audio_peak":         math.Round(float64(a.audioPeak)*10000) / 10000,
-		"idle_sec":           nanSeconds(a.idleSec),
-		"idle_threshold_sec": idle,
-		"foreground_process": a.fg.Process,
-		"foreground_title":   clip(a.fg.Title, 120),
-		"hook_ok":            a.hookOK,
-		"tray_ok":            a.trayOK,
-		"cpu_sec":            math.Round(processCPUSeconds()*100) / 100,
-		"data_dir":           a.cfg.DataDir,
+		"process":             "collector",
+		"pid":                 os.Getpid(),
+		"updated":             time.Now().Format("2006-01-02T15:04:05-07:00"),
+		"started_at":          a.startedAt.Format("2006-01-02T15:04:05-07:00"),
+		"uptime_sec":          int(time.Since(a.startedMono).Seconds()),
+		"ticks":               a.tickCount,
+		"foreground_events":   a.fgEvents,
+		"records_written":     a.store.Written(),
+		"records_dropped":     a.store.Dropped(),
+		"paused":              a.paused,
+		"session":             a.session(),
+		"idle":                a.idle,
+		"media":               a.media,
+		"audio_peak":          math.Round(float64(a.audioPeak)*10000) / 10000,
+		"idle_sec":            nanSeconds(a.idleSec),
+		"idle_threshold_sec":  idle,
+		"foreground_process":  a.fg.Process,
+		"foreground_title":    clip(a.fg.Title, 120),
+		"hook_ok":             a.hookOK,
+		"tray_ok":             a.trayOK,
+		"cpu_sec":             math.Round(processCPUSeconds()*100) / 100,
+		"data_dir":            a.cfg.DataDir,
+		"screenshot_enabled":  a.cfg.ScreenshotEnabled,
+		"screenshot_dir":      a.screenshotDir(),
+		"screenshots_written": a.screenshotsWritten.Load(),
+		"screenshot_failures": a.screenshotFailures.Load(),
+		"screenshot_busy":     a.screenshotBusy.Load(),
+	}
+	if v := a.lastScreenshotTS.Load(); v != nil {
+		st["last_screenshot_ts"] = v.(string)
+	}
+	if v := a.lastScreenshotPath.Load(); v != nil {
+		st["last_screenshot_path"] = v.(string)
 	}
 	for k, v := range memStats() {
 		st[k] = v
@@ -487,6 +526,7 @@ func (a *App) shutdown(reason string) {
 	a.store.Log("collector stop reason=" + reason + " records=" + itoa(a.store.Written()) +
 		" dropped=" + itoa(a.store.Dropped()))
 	a.removeTray()
+	a.screenshotWG.Wait()
 	a.store.Close()
 	procPostQuitMessage.Call(0)
 }
@@ -567,6 +607,9 @@ func (a *App) alerting() bool {
 	if !a.hookOK {
 		return true
 	}
+	if n := a.lastScreenshotFailure.Load(); n > 0 && time.Since(time.Unix(0, n)) < 10*time.Minute {
+		return true
+	}
 	return !a.lastDropMono.IsZero() && time.Since(a.lastDropMono) < 10*time.Minute
 }
 
@@ -575,6 +618,8 @@ func (a *App) alertDetail() string {
 	switch {
 	case !a.hookOK:
 		return "前台事件钩子失效，窗口切换可能漏记"
+	case a.lastScreenshotFailure.Load() > 0 && time.Since(time.Unix(0, a.lastScreenshotFailure.Load())) < 10*time.Minute:
+		return "最近有桌面截图失败，请查看日志"
 	case a.lastDropMono.IsZero():
 		return "状态未知，请查看日志"
 	default:

@@ -287,10 +287,7 @@ func (a *App) retryTrayIfNeeded() {
 func (a *App) run(maxSeconds float64) int {
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
-	// COM 要在线程上初始化；音频检测在同一个线程里跑，这里初始化一次即可
-	if err := comInit(); err != nil {
-		a.store.Log(err.Error() + "，音频检测不可用")
-	}
+	enablePerMonitorDPI()
 
 	store, err := newStore(a.cfg.DataDir, a.cfg.LogDir)
 	if err != nil {
@@ -298,6 +295,10 @@ func (a *App) run(maxSeconds float64) int {
 		return 2
 	}
 	a.store = store
+	// COM 要在线程上初始化；必须等日志存储就绪后再记录初始化失败。
+	if err := comInit(); err != nil {
+		a.store.Log(err.Error() + "，音频检测不可用")
+	}
 	if ep := lastRecordEpoch(a.cfg.DataDir); ep > 0 {
 		a.lastEpoch = ep
 	}
@@ -306,6 +307,7 @@ func (a *App) run(maxSeconds float64) int {
 	a.carryDay = time.Now().Format("2006-01-02")
 
 	a.paused = fileExists(a.pausePath)
+	a.screenshotPaused.Store(a.paused)
 	if a.paused {
 		a.store.Log("start in paused state (pause flag present)")
 	}
@@ -333,6 +335,7 @@ func (a *App) run(maxSeconds float64) int {
 	a.refreshIdle()
 	a.emitState("start", "process_start")
 	a.writeStatus()
+	a.maybeMaintainScreenshots()
 	a.store.Log("collector start pid=" + itoa(int64(os.Getpid())) +
 		" idle_threshold=" + ftoa(a.cfg.IdleThresholdSec) + "s hook_ok=" + btoa(a.hookOK) +
 		" tray=" + btoa(a.trayOK) + " data_dir=" + a.cfg.DataDir)
