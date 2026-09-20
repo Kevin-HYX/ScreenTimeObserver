@@ -102,13 +102,18 @@ const (
 	wmNull            = 0x0000
 
 	wmTrayIcon  = wmApp + 1
+	wmWiFiEvent = wmApp + 2
 	timerTickID = 1
 
-	idTrayPause    = 1001
-	idTrayOpen     = 1002
-	idTrayExit     = 1003
-	idTrayStatus   = 1004
-	idTrayCopyPath = 1005
+	idTrayPause            = 1001
+	idTrayOpen             = 1002
+	idTrayExit             = 1003
+	idTrayStatus           = 1004
+	idTrayCopyPath         = 1005
+	idTrayWiFiToggle       = 1006
+	idTrayWiFiStatus       = 1007
+	idTrayLocationSettings = 1008
+	idTrayDashboard        = 1009
 )
 
 const (

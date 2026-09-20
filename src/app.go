@@ -20,48 +20,57 @@ const collectorName = "屏幕时间采集器"
 const mutexName = "ScreenTimeObserver.M1.Collector"
 
 type Config struct {
-	DataDir                  string  `json:"data_dir"`
-	LogDir                   string  `json:"log_dir"`
-	IdleThresholdSec         float64 `json:"idle_threshold_sec"`
-	TickSec                  float64 `json:"tick_sec"`
-	ReconcileSec             float64 `json:"reconcile_sec"`
-	HeartbeatSec             float64 `json:"heartbeat_sec"`
-	PausedHeartbeatSec       float64 `json:"paused_heartbeat_sec"`
-	GapReportSec             float64 `json:"gap_report_sec"`
-	TitleMaxLen              int     `json:"title_max_len"`
-	Tray                     bool    `json:"tray"`
-	IconPath                 string  `json:"icon_path"`
-	IconMonoPath             string  `json:"icon_mono_path"`
-	IconStateDir             string  `json:"icon_state_dir"`
-	ScreenshotEnabled        bool    `json:"screenshot_enabled"`
-	ScreenshotIntervalSec    float64 `json:"screenshot_interval_sec"`
-	ScreenshotRetentionHours float64 `json:"screenshot_retention_hours"`
+	configPath                string
+	DataDir                   string  `json:"data_dir"`
+	LogDir                    string  `json:"log_dir"`
+	IdleThresholdSec          float64 `json:"idle_threshold_sec"`
+	TickSec                   float64 `json:"tick_sec"`
+	ReconcileSec              float64 `json:"reconcile_sec"`
+	HeartbeatSec              float64 `json:"heartbeat_sec"`
+	PausedHeartbeatSec        float64 `json:"paused_heartbeat_sec"`
+	GapReportSec              float64 `json:"gap_report_sec"`
+	TitleMaxLen               int     `json:"title_max_len"`
+	Tray                      bool    `json:"tray"`
+	IconPath                  string  `json:"icon_path"`
+	IconMonoPath              string  `json:"icon_mono_path"`
+	IconStateDir              string  `json:"icon_state_dir"`
+	ScreenshotEnabled         bool    `json:"screenshot_enabled"`
+	ScreenshotIntervalSec     float64 `json:"screenshot_interval_sec"`
+	ScreenshotRetentionHours  float64 `json:"screenshot_retention_hours"`
+	WiFiSnapshotIntervalSec   float64 `json:"wifi_snapshot_interval_sec"`
+	WiFiActiveScanIntervalSec float64 `json:"wifi_active_scan_interval_sec"`
+	WiFiRetentionDays         int     `json:"wifi_retention_days"`
 }
 
 func defaultConfig(exeDir string) Config {
 	return Config{
-		DataDir:                  filepath.Join(exeDir, "data"),
-		LogDir:                   filepath.Join(exeDir, "logs"),
-		IdleThresholdSec:         180,
-		TickSec:                  1,
-		ReconcileSec:             30,
-		HeartbeatSec:             60,
-		PausedHeartbeatSec:       60,
-		GapReportSec:             90,
-		TitleMaxLen:              300,
-		Tray:                     true,
-		IconPath:                 filepath.Join(exeDir, "assets", "logo.ico"),
-		IconMonoPath:             filepath.Join(exeDir, "assets", "logo-mono.ico"),
-		IconStateDir:             filepath.Join(exeDir, "assets", "states"),
-		ScreenshotEnabled:        true,
-		ScreenshotIntervalSec:    60,
-		ScreenshotRetentionHours: 24,
+		configPath:                filepath.Join(exeDir, "config.json"),
+		DataDir:                   filepath.Join(exeDir, "data"),
+		LogDir:                    filepath.Join(exeDir, "logs"),
+		IdleThresholdSec:          180,
+		TickSec:                   1,
+		ReconcileSec:              30,
+		HeartbeatSec:              60,
+		PausedHeartbeatSec:        60,
+		GapReportSec:              90,
+		TitleMaxLen:               300,
+		Tray:                      true,
+		IconPath:                  filepath.Join(exeDir, "assets", "logo.ico"),
+		IconMonoPath:              filepath.Join(exeDir, "assets", "logo-mono.ico"),
+		IconStateDir:              filepath.Join(exeDir, "assets", "states"),
+		ScreenshotEnabled:         true,
+		ScreenshotIntervalSec:     60,
+		ScreenshotRetentionHours:  24,
+		WiFiSnapshotIntervalSec:   300,
+		WiFiActiveScanIntervalSec: 1800,
+		WiFiRetentionDays:         15,
 	}
 }
 
 // loadConfig 以默认值为底，用 config.json 覆盖（缺项保持默认）。
 func loadConfig(exeDir, path string) (Config, error) {
 	cfg := defaultConfig(exeDir)
+	cfg.configPath = path
 	b, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -85,11 +94,22 @@ func loadConfig(exeDir, path string) (Config, error) {
 	if cfg.ScreenshotRetentionHours <= 0 {
 		cfg.ScreenshotRetentionHours = 24
 	}
+	if cfg.WiFiSnapshotIntervalSec <= 0 {
+		cfg.WiFiSnapshotIntervalSec = 300
+	}
+	if cfg.WiFiActiveScanIntervalSec <= 0 {
+		cfg.WiFiActiveScanIntervalSec = 1800
+	}
+	if cfg.WiFiRetentionDays <= 0 {
+		cfg.WiFiRetentionDays = 15
+	}
 	return cfg, nil
 }
 
 // App 持有全部运行状态。主线程跑消息循环，写盘在 Store 的独立 goroutine 里。
 type App struct {
+	settings  *screenshotSettingsStore
+	dashboard *dashboardServer
 	cfg       Config
 	exeDir    string
 	store     *Store
@@ -118,6 +138,10 @@ type App struct {
 	lastStatusMono            time.Time
 	lastScreenshotMono        time.Time
 	lastScreenshotCleanupMono time.Time
+	lastWiFiSnapshotMono      time.Time
+	lastWiFiScanMono          time.Time
+	lastWiFiCleanupMono       time.Time
+	wifiScanStartedMono       time.Time
 	carryDay                  string
 
 	tickCount int64
@@ -134,6 +158,18 @@ type App struct {
 	lastScreenshotTS      atomic.Value
 	lastScreenshotPath    atomic.Value
 	lastScreenshotFailure atomic.Int64
+
+	wifi                 *wifiManager
+	wifiWG               sync.WaitGroup
+	wifiBusy             atomic.Bool
+	wifiEnabled          atomic.Bool
+	wifiPaused           atomic.Bool
+	wifiPendingScan      bool
+	wifiWritten          atomic.Int64
+	wifiFailures         atomic.Int64
+	wifiLastTS           atomic.Value
+	wifiLastStatus       atomic.Value
+	wifiPermissionNotice atomic.Bool
 
 	hwnd          uintptr
 	trayIconH     uintptr
@@ -159,6 +195,7 @@ type App struct {
 
 func newApp(cfg Config, exeDir string, headless, verbose bool) *App {
 	return &App{
+		settings:  newScreenshotSettingsStore(cfg),
 		cfg:       cfg,
 		exeDir:    exeDir,
 		pausePath: filepath.Join(exeDir, "paused.flag"),
@@ -338,7 +375,9 @@ func (a *App) syncPause() {
 	}
 	a.paused = want
 	a.screenshotPaused.Store(want)
+	a.wifiPaused.Store(want)
 	if a.paused {
+		a.writeWiFiMarker("paused", "paused")
 		a.fg = Sample{}
 		a.idleSec = math.NaN()
 		a.idle = false
@@ -347,10 +386,13 @@ func (a *App) syncPause() {
 		a.store.Log("paused by user (flag file present)")
 	} else {
 		a.lastScreenshotMono = time.Time{}
+		a.lastWiFiSnapshotMono = time.Time{}
 		a.refreshForeground()
 		a.refreshIdle()
 		a.emitState("resumed", "user_resume")
 		a.store.Log("resumed by user")
+		a.writeWiFiMarker("resumed", "ready")
+		a.requestWiFiActiveScan("user_resume")
 	}
 	a.writeStatus()
 	a.refreshTrayTip()
@@ -361,6 +403,7 @@ func (a *App) tick() {
 	a.tickCount++
 	a.syncPause()
 	a.maybeMaintainScreenshots()
+	a.maybeMaintainWiFi()
 
 	if a.suspended {
 		return
@@ -433,39 +476,50 @@ func (a *App) reconcile() {
 func (a *App) writeStatus() {
 	idle := a.cfg.IdleThresholdSec
 	st := map[string]any{
-		"process":             "collector",
-		"pid":                 os.Getpid(),
-		"updated":             time.Now().Format("2006-01-02T15:04:05-07:00"),
-		"started_at":          a.startedAt.Format("2006-01-02T15:04:05-07:00"),
-		"uptime_sec":          int(time.Since(a.startedMono).Seconds()),
-		"ticks":               a.tickCount,
-		"foreground_events":   a.fgEvents,
-		"records_written":     a.store.Written(),
-		"records_dropped":     a.store.Dropped(),
-		"paused":              a.paused,
-		"session":             a.session(),
-		"idle":                a.idle,
-		"media":               a.media,
-		"audio_peak":          math.Round(float64(a.audioPeak)*10000) / 10000,
-		"idle_sec":            nanSeconds(a.idleSec),
-		"idle_threshold_sec":  idle,
-		"foreground_process":  a.fg.Process,
-		"foreground_title":    clip(a.fg.Title, 120),
-		"hook_ok":             a.hookOK,
-		"tray_ok":             a.trayOK,
-		"cpu_sec":             math.Round(processCPUSeconds()*100) / 100,
-		"data_dir":            a.cfg.DataDir,
-		"screenshot_enabled":  a.cfg.ScreenshotEnabled,
-		"screenshot_dir":      a.screenshotDir(),
-		"screenshots_written": a.screenshotsWritten.Load(),
-		"screenshot_failures": a.screenshotFailures.Load(),
-		"screenshot_busy":     a.screenshotBusy.Load(),
+		"process":              "collector",
+		"pid":                  os.Getpid(),
+		"updated":              time.Now().Format("2006-01-02T15:04:05-07:00"),
+		"started_at":           a.startedAt.Format("2006-01-02T15:04:05-07:00"),
+		"uptime_sec":           int(time.Since(a.startedMono).Seconds()),
+		"ticks":                a.tickCount,
+		"foreground_events":    a.fgEvents,
+		"records_written":      a.store.Written(),
+		"records_dropped":      a.store.Dropped(),
+		"paused":               a.paused,
+		"session":              a.session(),
+		"idle":                 a.idle,
+		"media":                a.media,
+		"audio_peak":           math.Round(float64(a.audioPeak)*10000) / 10000,
+		"idle_sec":             nanSeconds(a.idleSec),
+		"idle_threshold_sec":   idle,
+		"foreground_process":   a.fg.Process,
+		"foreground_title":     clip(a.fg.Title, 120),
+		"hook_ok":              a.hookOK,
+		"tray_ok":              a.trayOK,
+		"cpu_sec":              math.Round(processCPUSeconds()*100) / 100,
+		"data_dir":             a.cfg.DataDir,
+		"screenshot_enabled":   a.cfg.ScreenshotEnabled,
+		"screenshot_dir":       a.screenshotDir(),
+		"screenshots_written":  a.screenshotsWritten.Load(),
+		"screenshot_failures":  a.screenshotFailures.Load(),
+		"screenshot_busy":      a.screenshotBusy.Load(),
+		"wifi_enabled":         a.wifiEnabled.Load(),
+		"wifi_dir":             a.wifiDir(),
+		"wifi_busy":            a.wifiBusy.Load(),
+		"wifi_records_written": a.wifiWritten.Load(),
+		"wifi_failures":        a.wifiFailures.Load(),
 	}
 	if v := a.lastScreenshotTS.Load(); v != nil {
 		st["last_screenshot_ts"] = v.(string)
 	}
 	if v := a.lastScreenshotPath.Load(); v != nil {
 		st["last_screenshot_path"] = v.(string)
+	}
+	if v := a.wifiLastTS.Load(); v != nil {
+		st["last_wifi_ts"] = v.(string)
+	}
+	if v := a.wifiLastStatus.Load(); v != nil {
+		st["wifi_status"] = v.(string)
 	}
 	for k, v := range memStats() {
 		st[k] = v
@@ -498,6 +552,8 @@ func (a *App) onResume() {
 	a.refreshIdle()
 	a.emitState("online", "system_resume")
 	a.store.Log("system resume")
+	a.lastWiFiSnapshotMono = time.Time{}
+	a.requestWiFiActiveScan("system_resume")
 	a.refreshTrayTip()
 }
 
@@ -526,7 +582,14 @@ func (a *App) shutdown(reason string) {
 	a.store.Log("collector stop reason=" + reason + " records=" + itoa(a.store.Written()) +
 		" dropped=" + itoa(a.store.Dropped()))
 	a.removeTray()
+	if a.dashboard != nil {
+		_ = a.dashboard.server.Close()
+	}
 	a.screenshotWG.Wait()
+	a.wifiWG.Wait()
+	if a.wifi != nil {
+		a.wifi.close()
+	}
 	a.store.Close()
 	procPostQuitMessage.Call(0)
 }

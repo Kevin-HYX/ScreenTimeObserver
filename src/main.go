@@ -66,6 +66,12 @@ func realMain(args []string) int {
 	}
 
 	switch cmd {
+	case "configure-install":
+		if err := writeInstallConfig(exeDir, *dataDir); err != nil {
+			fmt.Fprintln(os.Stderr, "安装配置失败:", err)
+			return 2
+		}
+		return 0
 	case "run":
 		return cmdRun(cfg, exeDir, *headless || *noTray, *verbose, *maxSeconds, *diag)
 	case "once":
@@ -81,7 +87,7 @@ func realMain(args []string) int {
 	case "resume":
 		return cmdPause(exeDir, false)
 	case "version":
-		fmt.Println("screentimeobserver collector 1.0 (go, stdlib only)")
+		fmt.Println("screentimeobserver collector 1.3.1 (go, stdlib only)")
 		return 0
 	default:
 		fmt.Fprintln(os.Stderr, "未知子命令:", cmd)
@@ -187,6 +193,7 @@ func cmdStatus(cfg Config, asJSON bool) int {
 		"foreground_process", "foreground_title", "records_written", "records_dropped",
 		"foreground_events", "hook_ok", "tray_ok", "cpu_sec", "screenshot_enabled",
 		"screenshots_written", "screenshot_failures", "last_screenshot_ts", "screenshot_dir", "data_dir"}
+	keys = append(keys, "wifi_enabled", "wifi_status", "wifi_records_written", "wifi_failures", "last_wifi_ts", "wifi_dir")
 	for _, k := range keys {
 		fmt.Printf("%-20s %v\n", k, v[k])
 	}

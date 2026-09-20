@@ -78,7 +78,8 @@ func (a *App) maybeMaintainScreenshots() {
 		return
 	}
 	now := time.Now()
-	interval := time.Duration(a.cfg.ScreenshotIntervalSec * float64(time.Second))
+	settings := a.settings.get()
+	interval := time.Duration(settings.IntervalSec * float64(time.Second))
 	if interval <= 0 {
 		interval = time.Minute
 	}
@@ -108,7 +109,7 @@ func (a *App) maybeMaintainScreenshots() {
 			return
 		}
 		if cleanOld {
-			retention := time.Duration(a.cfg.ScreenshotRetentionHours * float64(time.Hour))
+			retention := time.Duration(a.settings.get().RetentionHours * float64(time.Hour))
 			removed, err := cleanupScreenshots(dir, capturedAt, retention)
 			if err != nil {
 				a.screenshotFailed("清理过期截图失败", err)

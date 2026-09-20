@@ -69,6 +69,9 @@ func (a *App) wndProc(hwnd, msg, wParam, lParam uintptr) uintptr {
 			a.showMenu()
 		}
 		return 0
+	case wmWiFiEvent:
+		a.onWiFiEvent(uint32(wParam))
+		return 0
 	case wmPowerBroadcast:
 		switch uint32(wParam) {
 		case pbtAPMSuspend:
@@ -206,6 +209,10 @@ func (a *App) refreshTrayTip() {
 func (a *App) showMenu() {
 	menu, _, _ := procCreatePopupMenu.Call()
 	defer procDestroyMenu.Call(menu)
+	dashboardLabel := u16Ptr("打开仪表盘")
+	procAppendMenuW.Call(menu, mfString, idTrayDashboard, uintptr(unsafe.Pointer(dashboardLabel)))
+	runtime.KeepAlive(dashboardLabel)
+	procAppendMenuW.Call(menu, mfSeparator, 0, 0)
 
 	pauseLabel := u16Ptr("暂停采集")
 	pauseFlags := uintptr(mfString | mfUnchecked)
@@ -220,6 +227,20 @@ func (a *App) showMenu() {
 	statusLabel := u16Ptr("状态：" + a.stateText())
 	procAppendMenuW.Call(menu, mfString, idTrayStatus, uintptr(unsafe.Pointer(statusLabel)))
 	runtime.KeepAlive(statusLabel)
+	wifiStatusLabel := u16Ptr("Wi-Fi 位置：" + a.wifiStateText())
+	procAppendMenuW.Call(menu, mfString, idTrayWiFiStatus, uintptr(unsafe.Pointer(wifiStatusLabel)))
+	runtime.KeepAlive(wifiStatusLabel)
+	wifiToggleText := "启用 Wi-Fi 位置指纹…"
+	if a.wifiEnabled.Load() {
+		wifiToggleText = "停用 Wi-Fi 位置指纹"
+	}
+	wifiToggleLabel := u16Ptr(wifiToggleText)
+	procAppendMenuW.Call(menu, mfString, idTrayWiFiToggle, uintptr(unsafe.Pointer(wifiToggleLabel)))
+	runtime.KeepAlive(wifiToggleLabel)
+	locationLabel := u16Ptr("打开 Windows 位置权限设置")
+	procAppendMenuW.Call(menu, mfString, idTrayLocationSettings, uintptr(unsafe.Pointer(locationLabel)))
+	runtime.KeepAlive(locationLabel)
+	procAppendMenuW.Call(menu, mfSeparator, 0, 0)
 
 	dataLabel := u16Ptr("打开数据目录")
 	procAppendMenuW.Call(menu, mfString, idTrayOpen, uintptr(unsafe.Pointer(dataLabel)))
@@ -241,12 +262,18 @@ func (a *App) showMenu() {
 	procPostMessageW.Call(a.hwnd, wmNull, 0, 0)
 
 	switch int32(cmd) {
+	case idTrayDashboard:
+		a.openDashboard()
 	case idTrayPause:
 		a.togglePause()
 	case idTrayOpen:
 		a.openDataDir()
 	case idTrayCopyPath:
 		a.copyDataDir()
+	case idTrayWiFiToggle:
+		a.toggleWiFi()
+	case idTrayLocationSettings:
+		a.openLocationSettings()
 	case idTrayExit:
 		a.shutdown("tray_exit")
 	}
@@ -308,6 +335,7 @@ func (a *App) run(maxSeconds float64) int {
 
 	a.paused = fileExists(a.pausePath)
 	a.screenshotPaused.Store(a.paused)
+	a.wifiPaused.Store(a.paused)
 	if a.paused {
 		a.store.Log("start in paused state (pause flag present)")
 	}
@@ -330,12 +358,15 @@ func (a *App) run(maxSeconds float64) int {
 	} else {
 		a.store.Log("headless mode: no tray, no window timer")
 	}
+	a.initWiFiIfEnabled()
 
 	a.refreshForeground()
 	a.refreshIdle()
 	a.emitState("start", "process_start")
 	a.writeStatus()
 	a.maybeMaintainScreenshots()
+	a.maybeMaintainWiFi()
+	a.startDashboard()
 	a.store.Log("collector start pid=" + itoa(int64(os.Getpid())) +
 		" idle_threshold=" + ftoa(a.cfg.IdleThresholdSec) + "s hook_ok=" + btoa(a.hookOK) +
 		" tray=" + btoa(a.trayOK) + " data_dir=" + a.cfg.DataDir)
