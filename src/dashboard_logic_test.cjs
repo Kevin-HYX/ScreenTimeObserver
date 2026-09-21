@@ -165,3 +165,23 @@ test('设置弹窗缩短保存期需确认，频率变化同步截图可用时�
  t.run("$('retentionHours').value='48';updateRetentionWarning();applyScreenshotSettings({screenshot_interval_sec:300,screenshot_retention_hours:48});");
  assert.equal(t.elements.get('shorterWarning').hidden,true);assert.equal(t.run('state.screenshotMaxAge'),450);assert.equal(t.run('state.screenshotRetentionSec'),172800);
 });
+
+test('活跃时间颜色只由状态决定，ChatGPT 与 Edge 一致且区别于媒体播放',()=>{
+ const t=setup();t.run(`state.day={start:0,end:86400,until:180,segments:[{start:0,end:60,kind:'active',process:'ChatGPT.exe'},{start:60,end:120,kind:'active',process:'msedge.exe'},{start:120,end:180,kind:'media',process:'msedge.exe'}]};$('timeline');`);
+ const colors=[];const ctx={scale(){},fillRect(){colors.push(this.fillStyle)},save(){},beginPath(){},rect(){},clip(){},moveTo(){},lineTo(){},stroke(){},restore(){}};
+ t.elements.get('timeline').getContext=()=>ctx;t.run('renderTimeline()');
+ assert.equal(colors[1],colors[2]);assert.notEqual(colors[1],colors[3]);assert.equal(colors[1],'#1266cc');
+});
+test('不足一分钟的媒体统计不能显示为零',()=>{
+ const t=setup();t.run(`state.day={start:0,until:4,segments:[{start:0,end:4,kind:'media',process:'msedge.exe'}]};renderStats();`);
+ assert.equal(t.elements.get('effective').textContent,'<1m');assert.equal(t.run('duration(0)'),'0m');
+});
+
+test('概览移除媒体播放卡片，渲染不再访问已删除元素',()=>{
+ const html=fs.readFileSync(__dirname+'/dashboard/index.html','utf8');
+ assert.doesNotMatch(html,/id="media"/);
+ const metrics=html.match(/<section class="metrics"[\s\S]*?<\/section>/)[0];
+ assert.equal((metrics.match(/<article /g)||[]).length,3);
+ const t=setup();t.run(`const getElement=document.getElementById;document.getElementById=id=>{if(id==='media')throw Error('媒体指标已删除');return getElement(id)};state.day={start:0,until:120,segments:[{start:0,end:60,kind:'active',process:'a'},{start:60,end:120,kind:'media',process:'b'}]};renderStats();`);
+ assert.equal(t.elements.get('effective').textContent,'2m');assert.equal(t.elements.get('active').textContent,'1m');
+});
