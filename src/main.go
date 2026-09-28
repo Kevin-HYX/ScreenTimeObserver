@@ -87,7 +87,7 @@ func realMain(args []string) int {
 	case "resume":
 		return cmdPause(exeDir, false)
 	case "version":
-		fmt.Println("screentimeobserver collector 1.3.1 (go, stdlib only)")
+		fmt.Println("screentimeobserver collector 1.5.0 (go, stdlib only)")
 		return 0
 	default:
 		fmt.Fprintln(os.Stderr, "未知子命令:", cmd)

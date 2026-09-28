@@ -11,7 +11,7 @@
 [Setup]
 AppId={{C347A3E8-D1B0-4C78-AE64-6382F974CE23}
 AppName=ScreenTimeObserver
-AppVersion=1.3.1
+AppVersion=1.5.0
 AppPublisher=ScreenTimeObserver
 DefaultDirName={localappdata}\Programs\ScreenTimeObserver
 DefaultGroupName=ScreenTimeObserver
@@ -27,7 +27,7 @@ ArchitecturesAllowed=x64os
 ArchitecturesInstallIn64BitMode=x64os
 #endif
 OutputDir={#OutputRoot}
-OutputBaseFilename=ScreenTimeObserver-1.3.1-windows-{#TargetArch}-setup
+OutputBaseFilename=ScreenTimeObserver-1.5.0-windows-{#TargetArch}-setup
 SetupIconFile=..\assets\logo.ico
 UninstallDisplayIcon={app}\assets\logo.ico
 Compression=lzma2
