@@ -34,6 +34,8 @@ main{max-width:1680px;padding:16px 22px 0}.intro{margin-bottom:14px;gap:12px}h1{
 .week-panel{display:flex;flex-direction:column}
 .week-panel>.section-head,.week-panel>.legend,.week-panel>#weekNote{flex:none}
 .week-panel .week{flex:1 1 auto;height:auto;min-height:210px}
+.week-selected{background:var(--active)}
+.week-other{background:#b9c6d8}
 
 /* 全屏侧栏使用独立滚动列表，保留截图和时间轴的可用高度。 */
 .recall-app-filter{display:none}

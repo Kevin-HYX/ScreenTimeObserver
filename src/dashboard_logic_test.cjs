@@ -5,7 +5,7 @@ const fs=require('node:fs');
 const vm=require('node:vm');
 function setup(){
  const elements=new Map(),images=[];
- function element(){return {value:'',textContent:'',hidden:false,disabled:false,style:{},children:[],classList:{toggle(){}},append(...v){this.children.push(...v)},replaceChildren(...v){this.children=v},listeners:{},addEventListener(k,v){this.listeners[k]=v},setAttribute(k,v){this[k]=v},replaceWith(other){elements.set(this.id||'shot',other)},removeAttribute(k){delete this[k]},close(){},showModal(){},getBoundingClientRect(){return {width:800}},getContext(){return {scale(){},fillRect(){},save(){},beginPath(){},rect(){},clip(){},moveTo(){},lineTo(){},stroke(){},restore(){}}}};}
+ function element(){return {value:'',textContent:'',hidden:false,disabled:false,style:{},dataset:{},children:[],classList:{toggle(){}},append(...v){this.children.push(...v)},replaceChildren(...v){this.children=v},listeners:{},addEventListener(k,v){this.listeners[k]=v},setAttribute(k,v){this[k]=v},replaceWith(other){elements.set(this.id||'shot',other)},removeAttribute(k){delete this[k]},close(){},showModal(){},getBoundingClientRect(){return {width:800}},getContext(){return {scale(){},fillRect(){},save(){},beginPath(){},rect(){},clip(){},moveTo(){},lineTo(){},stroke(){},restore(){}}}};}
  const document={hidden:false,fullscreenElement:null,addEventListener(){},getElementById(id){if(!elements.has(id))elements.set(id,Object.assign(element(),{id}));return elements.get(id)},createElement:element,querySelector:element};
  const context=vm.createContext({document,window:{devicePixelRatio:1},console,Date,AbortSignal,fetch:()=>new Promise(()=>{}),setInterval(){},setTimeout(){return 1},clearTimeout(){},ResizeObserver:class{observe(){}},Image:class{constructor(){Object.assign(this,element());images.push(this)}}});
  vm.runInContext(fs.readFileSync(__dirname+'/dashboard/app.js','utf8'),context);
@@ -17,6 +17,27 @@ test('范围截取不会改变原始区间，概览与应用排行一致',()=>{
  assert.equal(t.elements.get('effective').textContent,'1m');
  assert.equal(t.run('state.day.segments[0].start'),0);
  assert.equal(t.elements.get('apps').children.length,2);
+});
+test('七日图按应用拆分总时长，清除筛选后恢复单色柱',()=>{
+ const t=setup();
+ t.run(`state.day={date:'2026-09-28',start:0,end:86400,until:3600,shots:[],segments:[{start:0,end:1800,dur_sec:1800,kind:'active',process:'a'},{start:1800,end:3600,dur_sec:1800,kind:'media',process:'b'}]};state.weekDays=[{date:'2026-09-27',totals:{active:3600,media:1800,unknown:60},apps:[{name:'a',sec:1200},{name:'b',sec:4200}]},{date:'2026-09-28',totals:{active:1800,media:1800,unknown:0},apps:[{name:'a',sec:1800},{name:'b',sec:1800}]}];layoutWeekBars=()=>{};renderWeekChart();`);
+ assert.equal(t.elements.get('week').children[0].children[1].children.length,1);
+ assert.equal(t.elements.get('weekLegend').children.length,1);
+ t.run("setAppFilter('a')");
+ const first=t.elements.get('week').children[0],stack=first.children[1];
+ assert.equal(first.children[0].textContent,'1h 30m');
+ assert.equal(stack.children[0].className,'week-selected');
+ assert.ok(Math.abs(parseFloat(stack.children[0].style.height)-1200/5400*100)<.001);
+ assert.equal(stack.children[1].className,'week-other');
+ assert.ok(Math.abs(parseFloat(stack.children[1].style.height)-4200/5400*100)<.001);
+ assert.match(first.title,/a 20m，其他应用 1h 10m/);
+ assert.equal(t.elements.get('weekLegend').children.length,2);
+ t.run("setAppFilter('')");
+ assert.equal(t.elements.get('week').children[0].children[1].children.length,1);
+ assert.equal(t.elements.get('weekLegend').children.length,1);
+ const html=fs.readFileSync(__dirname+'/dashboard/index.html','utf8');
+ const weekPanel=html.match(/<article class="panel week-panel">[\s\S]*?<\/article>/)[0];
+ assert.doesNotMatch(weekPanel,/媒体播放/);
 });
 test('点击应用立即重绘时间轴，再次点击和清除筛选恢复全部时段',()=>{
  const t=setup();t.run(`state.day={start:0,end:86400,until:180,shots:[],segments:[{start:0,end:120,dur_sec:120,kind:'active',process:'msedge.exe'},{start:120,end:180,dur_sec:60,kind:'media',process:'b'}]};renderStats();`);

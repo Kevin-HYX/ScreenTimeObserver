@@ -23,7 +23,7 @@ function renderStats(){const totals={},apps=new Map();for(const s of slices()){t
 }
 function setAppFilter(app){
  state.app=app;state.limit=80;state.follow=false;
- renderStats();renderRows();selectTime(state.cursor);renderTimeline();
+ renderStats();renderRows();selectTime(state.cursor);renderTimeline();renderWeekChart();
 }
 function renderRecallApps(apps){
  const list=$('recallApps'),scroll=list.scrollTop;
@@ -160,9 +160,27 @@ function warmRecallImages(){
 function selectTime(ts,recenter=false,snap=true){const d=state.day;if(!d)return;ts=snap?filteredRecallTime(Number(ts)):Number(ts);if(ts===null){clearShot('该应用没有可回顾的活动');return;}state.cursor=Math.max(d.start,Math.min(Math.max(d.start,d.until-.001),Number(ts)));if(recenter)updateViewport(state.cursor);$('scrubber').value=String(state.cursor);$('cursorTime').textContent=time(state.cursor,true);const s=currentSegment(state.cursor);$('kind').textContent=s?labels[s.kind]:'暂无记录';$('process').textContent=s?.process?appName(s.process):(s?labels[s.kind]:'没有可回顾的活动');$('title').textContent=s?.title||({paused:'你主动暂停了采集，此段不记录活动细节。',unknown:'这段时间没有足够记录，不计入应用使用。',suspended:'电脑处于休眠状态。',locked:'电脑已锁屏。',idle:'一段没有键鼠操作、也没有音频活动的时间。'}[s?.kind]||'');$('segmentInfo').textContent=s?`${time(s.start)} — ${time(s.end)} · ${duration(s.dur_sec)}`:'';renderShot(s);}
 // 七日图柱高按卡片实测可用高度换算：卡片被同排面板拉高时柱子随之伸展，贴住卡片底部；-7 为 .week-col .stack 的 margin-top。
 function layoutWeekBars(){const box=$('week');if(!box)return;for(const col of box.children){const stack=col.querySelector('.stack');if(!stack||!stack.dataset)continue;const ratio=Number(stack.dataset.ratio||0);let others=0;for(const el of col.children)if(el!==stack)others+=el.offsetHeight;const avail=col.clientHeight-others-7;if(!(avail>10))continue;stack.style.height=Math.max(2,ratio*avail)+'px';}}
-async function renderWeek(date,force=false){const key=date+':'+Math.floor(Date.now()/120000);if(!force&&key===state.weekKey)return;state.weekKey=key;const generation=state.generation;const dates=Array.from({length:7},(_,i)=>dateShift(date,i-6));const results=await Promise.allSettled(dates.map(d=>api('/api/day?date='+d)));if(generation!==state.generation){state.weekKey='';return;}state.weekDays=results.map((r,i)=>r.status==='fulfilled'?r.value:{date:dates[i],error:true});const max=Math.max(3600,...state.weekDays.map(d=>(d.totals?.active||0)+(d.totals?.media||0)));$('week').replaceChildren();
- for(const d of state.weekDays){const a=d.totals?.active||0,m=d.totals?.media||0;const col=node('div',undefined,'week-col'+(d.date===date?' selected':''));col.title=d.error?'读取失败':`有效使用 ${duration(a+m)}，未采集 ${duration(d.totals?.unknown)}`;col.append(node('span',d.error?'读取失败':duration(a+m)));const stack=node('div',undefined,'stack');stack.dataset.ratio=String(max?(a+m)/max:0);const active=node('span',undefined,'active'),media=node('span',undefined,'media');active.style.height=(a+m?a/(a+m)*100:0)+'%';media.style.height=(a+m?m/(a+m)*100:0)+'%';stack.append(active,media);col.append(stack,node('span',d.date.slice(5).replace('-','/'),'day'),node('small',d.error?'—':`缺 ${duration(d.totals?.unknown)}`));$('week').append(col);}
- $('weekNote').textContent='';layoutWeekBars();
+function renderWeekChart(){
+ const date=state.day?.date;if(!date||!state.weekDays.length)return;
+ const max=Math.max(3600,...state.weekDays.map(d=>(d.totals?.active||0)+(d.totals?.media||0)));
+ $('week').replaceChildren();$('weekLegend').replaceChildren();
+ const selectedLegend=node('span');selectedLegend.append(node('i',undefined,'dot week-selected'),node('span',state.app?appName(state.app):'有效使用'));$('weekLegend').append(selectedLegend);
+ if(state.app){const otherLegend=node('span');otherLegend.append(node('i',undefined,'dot week-other'),node('span','其他应用'));$('weekLegend').append(otherLegend);}
+ for(const d of state.weekDays){
+  const total=(d.totals?.active||0)+(d.totals?.media||0);
+  const selected=state.app?Math.min(total,Math.max(0,d.apps?.find(a=>a.name===state.app)?.sec||0)):total;
+  const other=total-selected;
+  const col=node('div',undefined,'week-col'+(d.date===date?' selected':''));
+  col.title=d.error?'读取失败':state.app?`有效使用 ${duration(total)}，${appName(state.app)} ${duration(selected)}，其他应用 ${duration(other)}，未采集 ${duration(d.totals?.unknown)}`:`有效使用 ${duration(total)}，未采集 ${duration(d.totals?.unknown)}`;
+  col.append(node('span',d.error?'读取失败':duration(total)));
+  const stack=node('div',undefined,'stack');stack.dataset.ratio=String(total/max);
+  const selectedBar=node('span',undefined,'week-selected');selectedBar.style.height=(total?selected/total*100:0)+'%';stack.append(selectedBar);
+  if(state.app){const otherBar=node('span',undefined,'week-other');otherBar.style.height=(total?other/total*100:0)+'%';stack.append(otherBar);}
+  col.append(stack,node('span',d.date.slice(5).replace('-','/'),'day'),node('small',d.error?'—':`缺 ${duration(d.totals?.unknown)}`));$('week').append(col);
+ }
+ layoutWeekBars();
+}
+async function renderWeek(date,force=false){const key=date+':'+Math.floor(Date.now()/120000);if(!force&&key===state.weekKey)return;state.weekKey=key;const generation=state.generation;const dates=Array.from({length:7},(_,i)=>dateShift(date,i-6));const results=await Promise.allSettled(dates.map(d=>api('/api/day?date='+d)));if(generation!==state.generation){state.weekKey='';return;}state.weekDays=results.map((r,i)=>r.status==='fulfilled'?r.value:{date:dates[i],error:true});$('weekNote').textContent='';renderWeekChart();
 }
 async function loadDate(date,preserve=false){if(!/^\d{4}-\d{2}-\d{2}$/.test(date))return;const generation=++state.generation;
  try{const d=await api('/api/day?date='+date);if(generation!==state.generation)return;state.day=d;$('date').value=date;$('recallDate').value=date;$('nextDate').disabled=date>=localDate();$('recallNextDate').disabled=date>=localDate();if(!preserve){state.range=null;state.app='';state.limit=80;state.follow=true;$('resetRange').hidden=true;$('rangeLabel').textContent='全天';$('lightbox').close();clearShot('正在读取回顾信息…');}
